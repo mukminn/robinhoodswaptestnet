@@ -36,8 +36,8 @@ async function main() {
   const routerAddress = process.env.ROUTER_ADDRESS
   if (!routerAddress) throw new Error('ROUTER_ADDRESS env is required')
 
-  const ethPerToken = process.env.LP_ETH_PER_TOKEN || '0.0001'
-  const skipIfNoBalance = String(process.env.LP_SKIP_IF_NO_BALANCE || '').toLowerCase() === 'true'
+  const tokenPerLp = process.env.LP_TOKEN_AMOUNT || '0.1'
+  const ethPerLp = process.env.LP_ETH_PER_TOKEN || '0.001'
 
   const [deployer] = await ethers.getSigners()
   const deployerAddr = await deployer.getAddress()
@@ -46,8 +46,7 @@ async function main() {
 
   console.log('Deployer:', deployerAddr)
   console.log('Router:', routerAddress)
-  console.log('LP per token: 1 token +', ethPerToken, 'ETH')
-  console.log('Skip if no balance:', skipIfNoBalance)
+  console.log('LP per token:', tokenPerLp, 'token +', ethPerLp, 'ETH')
 
   for (const tokenAddr of TOKENS) {
     console.log('\n[token]', tokenAddr)
@@ -67,8 +66,8 @@ async function main() {
       // ignore
     }
 
-    const tokenAmount = 1n * 10n ** BigInt(decimals)
-    const ethAmount = ethers.parseEther(ethPerToken)
+    const tokenAmount = ethers.parseUnits(tokenPerLp, decimals)
+    const ethAmount = ethers.parseEther(ethPerLp)
 
     const bal: bigint = await token.balanceOf(deployerAddr)
     console.log('Symbol:', symbol)
@@ -76,12 +75,7 @@ async function main() {
     console.log('Balance:', ethers.formatUnits(bal, decimals), symbol)
 
     if (bal < tokenAmount) {
-      const msg = `Not enough ${symbol} balance to add LP (need 1 ${symbol}).` 
-      if (skipIfNoBalance) {
-        console.log('[skip]', msg)
-        continue
-      }
-      throw new Error(msg)
+      throw new Error(`Not enough ${symbol} balance to add LP (need ${tokenPerLp} ${symbol}).`)
     }
 
     const allowance: bigint = await token.allowance(deployerAddr, routerAddress)
