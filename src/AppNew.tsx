@@ -1,9 +1,9 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import type { Address } from 'viem'
 import { createPublicClient, createWalletClient, custom, formatUnits, http, isAddress, parseUnits } from 'viem'
-import { erc20Abi, uniswapV2RouterAbi } from './abi'
+import { erc20Abi, uniswapV2FactoryAbi, uniswapV2RouterAbi } from './abi'
 import { robinhoodTestnet } from './robinhoodChain'
-import { DEADLINE_SECONDS, DEFAULT_SLIPPAGE_BPS, DEFAULT_TOKEN_ADDRESS, ROUTER_ADDRESS } from './swapConfig'
+import { DEADLINE_SECONDS, DEFAULT_SLIPPAGE_BPS, DEFAULT_TOKEN_ADDRESS, FACTORY_ADDRESS, ROUTER_ADDRESS } from './swapConfig'
 import { DEFAULT_ERC20_TOKEN_ADDRESSES } from './tokens'
 
 type Token =
@@ -589,6 +589,10 @@ export function App() {
         setQuote({ status: 'error', message: 'Router address belum diset (VITE_ROUTER_ADDRESS)' })
         return
       }
+      if (!FACTORY_ADDRESS || !isAddress(FACTORY_ADDRESS)) {
+        setQuote({ status: 'error', message: 'Factory address belum diset (VITE_FACTORY_ADDRESS)' })
+        return
+      }
       if (!amountInText) {
         setQuote({ status: 'idle' })
         return
@@ -620,26 +624,30 @@ export function App() {
           return
         }
 
-        if (tokenIn.kind === 'native' || tokenOut.kind === 'native') {
-          const weth = (await publicClient.readContract({ address: ROUTER_ADDRESS as Address, abi: uniswapV2RouterAbi, functionName: 'WETH' })) as Address
-          const path: Address[] =
-            tokenIn.kind === 'native'
+        const weth = (await publicClient.readContract({ address: ROUTER_ADDRESS as Address, abi: uniswapV2RouterAbi, functionName: 'WETH' })) as Address
+        const path: Address[] =
+          tokenIn.kind === 'native' || tokenOut.kind === 'native'
+            ? tokenIn.kind === 'native'
               ? [weth, tokenAddress(tokenOut)]
               : [tokenAddress(tokenIn), weth]
+            : [tokenAddress(tokenIn), tokenAddress(tokenOut)]
 
-          const amounts = (await publicClient.readContract({
-            address: ROUTER_ADDRESS as Address,
-            abi: uniswapV2RouterAbi,
-            functionName: 'getAmountsOut',
-            args: [amountIn, path],
-          })) as readonly bigint[]
+        for (let i = 0; i < path.length - 1; i++) {
+          const a = path[i]!
+          const b = path[i + 1]!
+          const pair = (await publicClient.readContract({
+            address: FACTORY_ADDRESS as Address,
+            abi: uniswapV2FactoryAbi,
+            functionName: 'getPair',
+            args: [a, b],
+          })) as Address
 
-          const amountOut = amounts[amounts.length - 1]!
-          if (!cancelled) setQuote({ status: 'ready', amountOut, path })
-          return
+          if (!pair || pair === '0x0000000000000000000000000000000000000000') {
+            setQuote({ status: 'error', message: 'Pair belum ada (LP belum ditambah). Tambah liquidity dulu.' })
+            return
+          }
         }
 
-        const path: Address[] = [tokenAddress(tokenIn), tokenAddress(tokenOut)]
         const amounts = (await publicClient.readContract({
           address: ROUTER_ADDRESS as Address,
           abi: uniswapV2RouterAbi,
