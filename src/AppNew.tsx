@@ -236,9 +236,10 @@ export function App() {
     if (DEFAULT_TOKEN_ADDRESS && isAddress(DEFAULT_TOKEN_ADDRESS)) {
       return { kind: 'erc20', address: DEFAULT_TOKEN_ADDRESS as Address, symbol: 'ERC20', decimals: 18 }
     }
-    const first = DEFAULT_ERC20_TOKEN_ADDRESSES[0]
-    return first ? { kind: 'erc20', address: first, symbol: 'ERC20', decimals: 18 } : NATIVE_TOKEN
+    return NATIVE_TOKEN
   })
+  const [lpTokenAddressText, setLpTokenAddressText] = useState('')
+  const [lpTokenScanError, setLpTokenScanError] = useState('')
   const [lpTokenAmountText, setLpTokenAmountText] = useState('0.1')
   const [lpEthAmountText, setLpEthAmountText] = useState('0.001')
 
@@ -252,7 +253,7 @@ export function App() {
   const [balanceIn, setBalanceIn] = useState<bigint | null>(null)
   const [balanceOut, setBalanceOut] = useState<bigint | null>(null)
 
-  const [selectSide, setSelectSide] = useState<'in' | 'out' | 'lp' | null>(null)
+  const [selectSide, setSelectSide] = useState<'in' | 'out' | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
 
   const [customAddressText, setCustomAddressText] = useState('')
@@ -263,7 +264,7 @@ export function App() {
   const [approvalsOpen, setApprovalsOpen] = useState(false)
   const [trackedTokens, setTrackedTokens] = useState<Address[]>([])
   const [allowances, setAllowances] = useState<Record<string, bigint>>({})
-  const [tokenMeta, setTokenMeta] = useState<Record<string, { symbol: string; decimals: number }>>({})
+  const [tokenMeta, setTokenMeta] = useState<Record<string, { name?: string; symbol: string; decimals: number }>>({})
   const [revokeError, setRevokeError] = useState('')
   const [manualRevokeAddressText, setManualRevokeAddressText] = useState('')
 
@@ -339,16 +340,17 @@ export function App() {
       if (DEFAULT_TOKEN_ADDRESS && isAddress(DEFAULT_TOKEN_ADDRESS)) targets.push(DEFAULT_TOKEN_ADDRESS as Address)
       targets.push(...DEFAULT_ERC20_TOKEN_ADDRESSES)
 
-      const nextMeta: Record<string, { symbol: string; decimals: number }> = {}
+      const nextMeta: Record<string, { name?: string; symbol: string; decimals: number }> = {}
 
       await Promise.all(
         targets.map(async (tokenAddr) => {
           try {
-            const [symbol, decimals] = await Promise.all([
+            const [name, symbol, decimals] = await Promise.all([
+              publicClient.readContract({ address: tokenAddr, abi: erc20Abi, functionName: 'name' }) as Promise<string>,
               publicClient.readContract({ address: tokenAddr, abi: erc20Abi, functionName: 'symbol' }) as Promise<string>,
               publicClient.readContract({ address: tokenAddr, abi: erc20Abi, functionName: 'decimals' }) as Promise<number>,
             ])
-            nextMeta[tokenAddr.toLowerCase()] = { symbol, decimals }
+            nextMeta[tokenAddr.toLowerCase()] = { name, symbol, decimals }
           } catch {
             // ignore
           }
@@ -376,12 +378,13 @@ export function App() {
       const owner = address as Address
       const router = ROUTER_ADDRESS as Address
       const nextAllowances: Record<string, bigint> = {}
-      const nextMeta: Record<string, { symbol: string; decimals: number }> = {}
+      const nextMeta: Record<string, { name?: string; symbol: string; decimals: number }> = {}
 
       await Promise.all(
         trackedTokens.map(async (tokenAddr) => {
           try {
-            const [symbol, decimals, allowance] = await Promise.all([
+            const [name, symbol, decimals, allowance] = await Promise.all([
+              publicClient.readContract({ address: tokenAddr, abi: erc20Abi, functionName: 'name' }) as Promise<string>,
               publicClient.readContract({ address: tokenAddr, abi: erc20Abi, functionName: 'symbol' }) as Promise<string>,
               publicClient.readContract({ address: tokenAddr, abi: erc20Abi, functionName: 'decimals' }) as Promise<number>,
               publicClient.readContract({
@@ -393,7 +396,7 @@ export function App() {
             ])
 
             nextAllowances[tokenAddr.toLowerCase()] = allowance
-            nextMeta[tokenAddr.toLowerCase()] = { symbol, decimals }
+            nextMeta[tokenAddr.toLowerCase()] = { name, symbol, decimals }
           } catch {
             // ignore token
           }
@@ -910,16 +913,9 @@ export function App() {
     setSelectSide(side)
   }
 
-  function openLpTokenSelect() {
-    setCustomError('')
-    setCustomAddressText('')
-    setSelectSide('lp')
-  }
-
   function pickToken(token: Token) {
     if (selectSide === 'in') setTokenIn(token)
     if (selectSide === 'out') setTokenOut(token)
-    if (selectSide === 'lp') setLpToken(token)
     setSelectSide(null)
   }
 
@@ -931,9 +927,56 @@ export function App() {
     }
     const addr = customAddressText as Address
 
-    const token: Token = { kind: 'erc20', address: addr, symbol: 'ERC20', decimals: 18 }
-    trackToken(addr)
-    pickToken(token)
+    if (!publicClient) {
+      const token: Token = { kind: 'erc20', address: addr, symbol: 'ERC20', decimals: 18 }
+      trackToken(addr)
+      pickToken(token)
+      return
+    }
+
+    try {
+      const [name, symbol, decimals] = await Promise.all([
+        publicClient.readContract({ address: addr, abi: erc20Abi, functionName: 'name' }) as Promise<string>,
+        publicClient.readContract({ address: addr, abi: erc20Abi, functionName: 'symbol' }) as Promise<string>,
+        publicClient.readContract({ address: addr, abi: erc20Abi, functionName: 'decimals' }) as Promise<number>,
+      ])
+      setTokenMeta((prev) => ({ ...prev, [addr.toLowerCase()]: { name, symbol, decimals } }))
+      const token: Token = { kind: 'erc20', address: addr, symbol, decimals }
+      trackToken(addr)
+      pickToken(token)
+    } catch {
+      const token: Token = { kind: 'erc20', address: addr, symbol: 'ERC20', decimals: 18 }
+      trackToken(addr)
+      pickToken(token)
+    }
+  }
+
+  async function onScanLpToken() {
+    setLpTokenScanError('')
+    if (!publicClient) {
+      setLpTokenScanError('No public client')
+      return
+    }
+    const txt = lpTokenAddressText.trim()
+    if (!isAddress(txt)) {
+      setLpTokenScanError('Address tidak valid')
+      return
+    }
+
+    const addr = getAddress(txt) as Address
+    try {
+      const [name, symbol, decimals] = await Promise.all([
+        publicClient.readContract({ address: addr, abi: erc20Abi, functionName: 'name' }) as Promise<string>,
+        publicClient.readContract({ address: addr, abi: erc20Abi, functionName: 'symbol' }) as Promise<string>,
+        publicClient.readContract({ address: addr, abi: erc20Abi, functionName: 'decimals' }) as Promise<number>,
+      ])
+
+      setTokenMeta((prev) => ({ ...prev, [addr.toLowerCase()]: { name, symbol, decimals } }))
+      trackToken(addr)
+      setLpToken({ kind: 'erc20', address: addr, symbol, decimals })
+    } catch {
+      setLpTokenScanError('Gagal scan token (pastikan ERC20)')
+    }
   }
 
   async function onAddLp() {
@@ -1302,19 +1345,23 @@ export function App() {
         ) : (
           <div className="space-y-3">
             <div className="rounded-2xl border border-white/10 bg-black/20 p-3">
-              <div className="text-xs text-white/60">Token</div>
-              <div className="mt-2 flex items-center justify-between gap-2">
-                <div className="min-w-0">
-                  <div className="truncate text-sm font-semibold">{lpToken.kind === 'erc20' ? lpToken.symbol : 'Select token'}</div>
-                  <div className="truncate text-[11px] text-white/40">{lpToken.kind === 'erc20' ? lpToken.address : ''}</div>
-                </div>
-                <button
-                  className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-white/80 hover:bg-white/10"
-                  type="button"
-                  onClick={openLpTokenSelect}
-                >
-                  Select
-                </button>
+              <div className="text-xs text-white/60">Token contract address</div>
+              <input
+                className="mt-2 w-full rounded-xl border border-white/10 bg-black/30 px-3 py-2 text-sm text-white outline-none placeholder:text-white/30"
+                placeholder="0x..."
+                value={lpTokenAddressText}
+                onChange={(e) => setLpTokenAddressText(e.target.value.trim())}
+              />
+              {lpTokenScanError ? <div className="mt-2 text-xs text-rose-300">{lpTokenScanError}</div> : null}
+              <button
+                className="mt-3 w-full rounded-xl bg-white/10 px-3 py-2 text-sm font-semibold text-white/80 hover:bg-white/15"
+                type="button"
+                onClick={() => void onScanLpToken()}
+              >
+                Scan token
+              </button>
+              <div className="mt-2 text-xs text-white/60">
+                Selected: {lpToken.kind === 'erc20' ? `${lpToken.symbol}` : '-'}
               </div>
             </div>
 
