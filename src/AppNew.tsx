@@ -231,6 +231,17 @@ export function App() {
     return NATIVE_TOKEN
   })
 
+  const [lpOpen, setLpOpen] = useState(false)
+  const [lpToken, setLpToken] = useState<Token>(() => {
+    if (DEFAULT_TOKEN_ADDRESS && isAddress(DEFAULT_TOKEN_ADDRESS)) {
+      return { kind: 'erc20', address: DEFAULT_TOKEN_ADDRESS as Address, symbol: 'ERC20', decimals: 18 }
+    }
+    const first = DEFAULT_ERC20_TOKEN_ADDRESSES[0]
+    return first ? { kind: 'erc20', address: first, symbol: 'ERC20', decimals: 18 } : NATIVE_TOKEN
+  })
+  const [lpTokenAmountText, setLpTokenAmountText] = useState('0.1')
+  const [lpEthAmountText, setLpEthAmountText] = useState('0.001')
+
   const [amountInText, setAmountInText] = useState('')
   const [slippageBps, setSlippageBps] = useState(DEFAULT_SLIPPAGE_BPS)
 
@@ -241,7 +252,7 @@ export function App() {
   const [balanceIn, setBalanceIn] = useState<bigint | null>(null)
   const [balanceOut, setBalanceOut] = useState<bigint | null>(null)
 
-  const [selectSide, setSelectSide] = useState<'in' | 'out' | null>(null)
+  const [selectSide, setSelectSide] = useState<'in' | 'out' | 'lp' | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
 
   const [customAddressText, setCustomAddressText] = useState('')
@@ -899,9 +910,16 @@ export function App() {
     setSelectSide(side)
   }
 
+  function openLpTokenSelect() {
+    setCustomError('')
+    setCustomAddressText('')
+    setSelectSide('lp')
+  }
+
   function pickToken(token: Token) {
     if (selectSide === 'in') setTokenIn(token)
     if (selectSide === 'out') setTokenOut(token)
+    if (selectSide === 'lp') setLpToken(token)
     setSelectSide(null)
   }
 
@@ -916,6 +934,79 @@ export function App() {
     const token: Token = { kind: 'erc20', address: addr, symbol: 'ERC20', decimals: 18 }
     trackToken(addr)
     pickToken(token)
+  }
+
+  async function onAddLp() {
+    try {
+      if (!address || !walletClient) throw new Error('Connect wallet dulu')
+      if (!publicClient) throw new Error('No public client')
+      if (!ROUTER_ADDRESS || !isAddress(ROUTER_ADDRESS)) throw new Error('Router not set')
+      if (chainMismatch) throw new Error('Wrong network: switch ke Robinhood Chain Testnet (chainId 46630)')
+      if (lpToken.kind !== 'erc20') throw new Error('Pilih token ERC20')
+
+      const acct = await walletAccount()
+
+      const tokenAmtText = lpTokenAmountText.trim()
+      const ethAmtText = lpEthAmountText.trim()
+      if (!tokenAmtText) throw new Error('Masukkan jumlah token')
+      if (!ethAmtText) throw new Error('Masukkan jumlah ETH')
+
+      let tokenAmount: bigint
+      let ethAmount: bigint
+      try {
+        tokenAmount = parseUnits(tokenAmtText, tokenDecimals(lpToken))
+      } catch {
+        throw new Error('Jumlah token tidak valid')
+      }
+      try {
+        ethAmount = parseUnits(ethAmtText, 18)
+      } catch {
+        throw new Error('Jumlah ETH tidak valid')
+      }
+
+      if (tokenAmount <= 0n) throw new Error('Jumlah token harus > 0')
+      if (ethAmount <= 0n) throw new Error('Jumlah ETH harus > 0')
+
+      setTxStatus('Approving (LP)...')
+      const allowance = (await publicClient.readContract({
+        address: lpToken.address,
+        abi: erc20Abi,
+        functionName: 'allowance',
+        args: [acct, ROUTER_ADDRESS as Address],
+      })) as bigint
+
+      if (allowance < tokenAmount) {
+        const hashApprove = await walletClient.writeContract({
+          address: lpToken.address,
+          abi: erc20Abi,
+          functionName: 'approve',
+          args: [ROUTER_ADDRESS as Address, tokenAmount],
+          account: acct,
+          chain: robinhoodTestnet,
+        })
+        setTxHash(hashApprove)
+        await publicClient.waitForTransactionReceipt({ hash: hashApprove })
+      }
+
+      setTxStatus('Adding liquidity...')
+      const hash = await walletClient.writeContract({
+        address: ROUTER_ADDRESS as Address,
+        abi: uniswapV2RouterAbi,
+        functionName: 'addLiquidityETH',
+        args: [lpToken.address, tokenAmount, acct],
+        value: ethAmount,
+        account: acct,
+        chain: robinhoodTestnet,
+      })
+
+      setTxHash(hash)
+      const receipt = await publicClient.waitForTransactionReceipt({ hash })
+      setTxStatus(`LP Success: ${receipt.transactionHash}`)
+      setLpOpen(false)
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      setTxStatus(`LP Error: ${msg}`)
+    }
   }
 
   const commonTokens: Array<{ name: string; token: Token; subtitle?: string }> = useMemo(() => {
@@ -963,6 +1054,13 @@ export function App() {
               disabled={!address}
             >
               History
+            </button>
+            <button
+              className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-white/80 hover:bg-white/10 disabled:opacity-60"
+              onClick={() => setLpOpen(true)}
+              disabled={!address}
+            >
+              Add LP
             </button>
             <button
               className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-white/80 hover:bg-white/10 disabled:opacity-60"
@@ -1194,6 +1292,66 @@ export function App() {
             </button>
           </div>
         </div>
+      </Modal>
+
+      <Modal open={lpOpen} onClose={() => setLpOpen(false)} title="Add Liquidity">
+        {!address ? (
+          <div className="text-sm text-white/70">Connect wallet dulu.</div>
+        ) : chainMismatch ? (
+          <div className="text-sm text-white/70">Wrong network. Switch ke Robinhood Chain Testnet.</div>
+        ) : (
+          <div className="space-y-3">
+            <div className="rounded-2xl border border-white/10 bg-black/20 p-3">
+              <div className="text-xs text-white/60">Token</div>
+              <div className="mt-2 flex items-center justify-between gap-2">
+                <div className="min-w-0">
+                  <div className="truncate text-sm font-semibold">{lpToken.kind === 'erc20' ? lpToken.symbol : 'Select token'}</div>
+                  <div className="truncate text-[11px] text-white/40">{lpToken.kind === 'erc20' ? lpToken.address : ''}</div>
+                </div>
+                <button
+                  className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-white/80 hover:bg-white/10"
+                  type="button"
+                  onClick={openLpTokenSelect}
+                >
+                  Select
+                </button>
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-white/10 bg-black/20 p-3">
+              <div className="text-xs text-white/60">Amount token</div>
+              <input
+                className="mt-2 w-full rounded-xl border border-white/10 bg-black/30 px-3 py-2 text-sm text-white outline-none placeholder:text-white/30"
+                placeholder="0.1"
+                value={lpTokenAmountText}
+                onChange={(e) => setLpTokenAmountText(e.target.value)}
+                inputMode="decimal"
+              />
+            </div>
+
+            <div className="rounded-2xl border border-white/10 bg-black/20 p-3">
+              <div className="text-xs text-white/60">Amount ETH</div>
+              <input
+                className="mt-2 w-full rounded-xl border border-white/10 bg-black/30 px-3 py-2 text-sm text-white outline-none placeholder:text-white/30"
+                placeholder="0.001"
+                value={lpEthAmountText}
+                onChange={(e) => setLpEthAmountText(e.target.value)}
+                inputMode="decimal"
+              />
+            </div>
+
+            <button
+              className="w-full rounded-2xl bg-gradient-to-b from-indigo-500 to-indigo-700 py-3 text-sm font-semibold hover:brightness-110 disabled:opacity-60"
+              type="button"
+              onClick={() => void onAddLp()}
+              disabled={lpToken.kind !== 'erc20'}
+            >
+              Add Liquidity
+            </button>
+
+            <div className="text-[11px] text-white/40">Pair: Token / WETH (via addLiquidityETH)</div>
+          </div>
+        )}
       </Modal>
 
       <Modal open={settingsOpen} onClose={() => setSettingsOpen(false)} title="Swap settings">

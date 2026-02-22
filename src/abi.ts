@@ -52,6 +52,21 @@ export const uniswapV2RouterAbi = [
   },
   {
     type: 'function',
+    name: 'addLiquidityETH',
+    stateMutability: 'payable',
+    inputs: [
+      { name: 'token', type: 'address' },
+      { name: 'amountTokenDesired', type: 'uint256' },
+      { name: 'to', type: 'address' },
+    ],
+    outputs: [
+      { name: 'amountToken', type: 'uint256' },
+      { name: 'amountETH', type: 'uint256' },
+      { name: 'liquidity', type: 'uint256' },
+    ],
+  },
+  {
+    type: 'function',
     name: 'getAmountsOut',
     stateMutability: 'view',
     inputs: [
