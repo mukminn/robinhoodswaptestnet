@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
 import type { Address } from 'viem'
 import { createPublicClient, createWalletClient, custom, formatUnits, http, isAddress, parseUnits } from 'viem'
 import { erc20Abi, uniswapV2RouterAbi } from './abi'
 import { robinhoodTestnet } from './robinhoodChain'
 import { DEADLINE_SECONDS, DEFAULT_SLIPPAGE_BPS, DEFAULT_TOKEN_ADDRESS, ROUTER_ADDRESS } from './swapConfig'
+import { DEFAULT_ERC20_TOKEN_ADDRESSES } from './tokens'
 
 type Token =
   | {
@@ -287,6 +288,7 @@ export function App() {
     const initial = loadTrackedTokens()
     const extras: Address[] = []
     if (DEFAULT_TOKEN_ADDRESS && isAddress(DEFAULT_TOKEN_ADDRESS)) extras.push(DEFAULT_TOKEN_ADDRESS as Address)
+    extras.push(...DEFAULT_ERC20_TOKEN_ADDRESSES)
     if (tokenIn.kind === 'erc20') extras.push(tokenIn.address)
     if (tokenOut.kind === 'erc20') extras.push(tokenOut.address)
     const all = [...initial, ...extras]
@@ -863,8 +865,20 @@ export function App() {
         subtitle: DEFAULT_TOKEN_ADDRESS,
       })
     }
+
+    for (const addr of DEFAULT_ERC20_TOKEN_ADDRESSES) {
+      const lower = addr.toLowerCase()
+      const meta = tokenMeta[lower]
+      const symbol = meta?.symbol || 'ERC20'
+      const decimals = meta?.decimals ?? 18
+      items.push({
+        name: symbol,
+        token: { kind: 'erc20', address: addr, symbol, decimals },
+        subtitle: addr,
+      })
+    }
     return items
-  }, [])
+  }, [tokenMeta])
 
   return (
     <div className="min-h-screen text-white">
