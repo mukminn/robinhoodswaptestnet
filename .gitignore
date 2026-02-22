@@ -1,0 +1,8 @@
+.env
+i.env
+node_modules
+artifacts
+cache
+dist
+verify_out
+tsconfig.tsbuildinfo
