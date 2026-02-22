@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import type { Address } from 'viem'
-import { createPublicClient, createWalletClient, custom, formatUnits, http, isAddress, parseUnits } from 'viem'
+import { createPublicClient, createWalletClient, custom, formatUnits, getAddress, http, isAddress, parseUnits } from 'viem'
 import { erc20Abi, uniswapV2FactoryAbi, uniswapV2RouterAbi } from './abi'
 import { robinhoodTestnet } from './robinhoodChain'
 import { DEADLINE_SECONDS, DEFAULT_SLIPPAGE_BPS, DEFAULT_TOKEN_ADDRESS, FACTORY_ADDRESS, ROUTER_ADDRESS } from './swapConfig'
@@ -146,6 +146,14 @@ export function App() {
       transport: http(robinhoodTestnet.rpcUrls.default.http[0]),
     })
   }, [])
+
+  async function walletAccount() {
+    if (!walletClient) throw new Error('Wallet not connected')
+    const addrs = await walletClient.getAddresses()
+    const acc = addrs?.[0]
+    if (!acc) throw new Error('Wallet not connected')
+    return getAddress(acc) as Address
+  }
   const [address, setAddress] = useState<Address | null>(null)
   const [chainId, setChainId] = useState<number | null>(null)
   const [connectError, setConnectError] = useState<string>('')
@@ -184,7 +192,7 @@ export function App() {
       try {
         const accounts = (await eth.request({ method: 'eth_accounts' })) as string[]
         const acc = accounts?.[0]
-        if (!cancelled) setAddress(acc ? (acc as Address) : null)
+        if (!cancelled) setAddress(acc ? (getAddress(acc) as Address) : null)
       } catch {
         // ignore
       }
@@ -192,7 +200,11 @@ export function App() {
 
     function onAccountsChanged(accounts: string[]) {
       const acc = accounts?.[0]
-      setAddress(acc ? (acc as Address) : null)
+      try {
+        setAddress(acc ? (getAddress(acc) as Address) : null)
+      } catch {
+        setAddress(null)
+      }
     }
 
     function onChainChanged(cidHex: string) {
@@ -698,6 +710,8 @@ export function App() {
 
     trackToken(tokenIn.address)
 
+    const acct = await walletAccount()
+
     const allowance = (await publicClient.readContract({
       address: tokenIn.address,
       abi: erc20Abi,
@@ -713,7 +727,7 @@ export function App() {
       abi: erc20Abi,
       functionName: 'approve',
       args: [ROUTER_ADDRESS as Address, amountIn],
-      account: address,
+      account: acct,
       chain: robinhoodTestnet,
     })
 
@@ -740,6 +754,8 @@ export function App() {
       if (!address || !walletClient) throw new Error('Connect wallet dulu')
       if (!routerOk) throw new Error('Router not set')
 
+      const acct = await walletAccount()
+
       setTxStatus('Revoking...')
       setTxHash('')
 
@@ -748,7 +764,7 @@ export function App() {
         abi: erc20Abi,
         functionName: 'approve',
         args: [ROUTER_ADDRESS as Address, 0n],
-        account: address,
+        account: acct,
         chain: robinhoodTestnet,
       })
 
@@ -781,6 +797,8 @@ export function App() {
       if (quote.status !== 'ready') throw new Error('Quote belum siap')
       if (chainMismatch) throw new Error('Wrong network: switch ke Robinhood Chain Testnet (chainId 46630)')
 
+      const acct = await walletAccount()
+
       const amountIn = parseUnits(amountInText, tokenDecimals(tokenIn))
       const minOut = (quote.amountOut * BigInt(10_000 - slippageBps)) / 10_000n
       const deadline = BigInt(Math.floor(Date.now() / 1000) + DEADLINE_SECONDS)
@@ -796,7 +814,7 @@ export function App() {
           functionName: 'swapExactETHForTokens',
           args: [minOut, quote.path, address, deadline],
           value: amountIn,
-          account: address,
+          account: acct,
           chain: robinhoodTestnet,
         })
         setTxHash(hash)
@@ -825,7 +843,7 @@ export function App() {
           abi: uniswapV2RouterAbi,
           functionName: 'swapExactTokensForETH',
           args: [amountIn, minOut, quote.path, address, deadline],
-          account: address,
+          account: acct,
           chain: robinhoodTestnet,
         })
         setTxHash(hash)
@@ -839,7 +857,7 @@ export function App() {
         abi: uniswapV2RouterAbi,
         functionName: 'swapExactTokensForTokens',
         args: [amountIn, minOut, quote.path, address, deadline],
-        account: address,
+        account: acct,
         chain: robinhoodTestnet,
       })
 
