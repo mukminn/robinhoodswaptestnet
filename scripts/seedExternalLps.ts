@@ -30,10 +30,18 @@ const ERC20_ABI = [
   'function approve(address spender, uint256 value) returns (bool)',
 ] as const
 
+function pickEnv(keys: string[]) {
+  for (const k of keys) {
+    const v = process.env[k]
+    if (v && v.trim()) return v.trim()
+  }
+  return ''
+}
+
 async function main() {
   const { ethers } = hre
 
-  const routerAddress = process.env.ROUTER_ADDRESS
+  const routerAddress = pickEnv(['ROUTER_ADDRESS', 'VITE_ROUTER_ADDRESS'])
   if (!routerAddress) throw new Error('ROUTER_ADDRESS env is required')
 
   const tokenPerLp = process.env.LP_TOKEN_AMOUNT || '0.1'
