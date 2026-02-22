@@ -309,6 +309,42 @@ export function App() {
   useEffect(() => {
     let cancelled = false
 
+    async function loadDefaultTokenMeta() {
+      if (!publicClient) return
+
+      const targets: Address[] = []
+      if (DEFAULT_TOKEN_ADDRESS && isAddress(DEFAULT_TOKEN_ADDRESS)) targets.push(DEFAULT_TOKEN_ADDRESS as Address)
+      targets.push(...DEFAULT_ERC20_TOKEN_ADDRESSES)
+
+      const nextMeta: Record<string, { symbol: string; decimals: number }> = {}
+
+      await Promise.all(
+        targets.map(async (tokenAddr) => {
+          try {
+            const [symbol, decimals] = await Promise.all([
+              publicClient.readContract({ address: tokenAddr, abi: erc20Abi, functionName: 'symbol' }) as Promise<string>,
+              publicClient.readContract({ address: tokenAddr, abi: erc20Abi, functionName: 'decimals' }) as Promise<number>,
+            ])
+            nextMeta[tokenAddr.toLowerCase()] = { symbol, decimals }
+          } catch {
+            // ignore
+          }
+        }),
+      )
+
+      if (cancelled) return
+      setTokenMeta((prev) => ({ ...prev, ...nextMeta }))
+    }
+
+    void loadDefaultTokenMeta()
+    return () => {
+      cancelled = true
+    }
+  }, [publicClient])
+
+  useEffect(() => {
+    let cancelled = false
+
     async function loadMetaAndAllowances() {
       if (!publicClient) return
       if (!address) return
